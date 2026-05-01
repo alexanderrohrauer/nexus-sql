@@ -1,11 +1,9 @@
-import re
-
-from beanie.odm.operators.find.evaluation import RegEx
-
 from app.models import Institution
 from app.utils.api_utils import SearchAndFilterParams
 
 
 class InstitutionSearchParams(SearchAndFilterParams):
-    def get_search_beanie_operator(self):
-        return RegEx(Institution.name, re.compile(self.search, flags=re.IGNORECASE))
+    def get_search_conditions(self, model_class) -> list:
+        if self.search:
+            return [model_class.name.ilike(f"%{self.search}%")]
+        return []

@@ -1,37 +1,15 @@
 import numpy as np
 import pandas as pd
-from beanie.odm.operators.find.logical import Not
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
+from app.db.db import get_session
 from app.models import Work, Institution, Researcher
 from app.utils.db_utils import fix_location_util
-from app.utils.visualization_utils import Chart, ChartType, ChartTemplates, read_generator, SeriesMap, ChartInput, \
-    Series, EntityType, create_basic_generator
-
-
-# class ResearcherEdgeBundling(Chart):
-#     identifier = "researcher_edge_bundling"
-#     name = "Researcher Edge-Bundling"
-#     type = ChartType.MIXED
-#     chart_template = ChartTemplates.ECHARTS
-#     generator = read_generator("relations.js")
-#
-#     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
-#         result = SeriesMap()
-#         query = chart_input.get_series_query("researchers")
-#         works = await Work.find(query, nesting_depth=2, fetch_links=True).limit(30).to_list()
-#         nodes = []
-#         links = []
-#         for w in works:
-#             author_nodes = [{"id": a.uuid, "name": a.full_name, "$nexus": {"type": EntityType.RESEARCHER, "id": a.uuid}}
-#                             for a in w.authors]
-#             nodes = nodes + author_nodes
-#             author_ids = [a.uuid for a in w.authors]
-#             pairs = list(combinations(author_ids, 2))
-#             pairs = [{"source": s, "target": t} for s, t in pairs]
-#             links = links + pairs
-#         nodes = _.uniq_by(nodes, lambda a: a["id"])
-#         result.add("researchers", Series(data={"data": nodes, "links": links}, entity_type=EntityType.WORK))
-#         return result
+from app.utils.visualization_utils import (
+    Chart, ChartType, ChartTemplates, read_generator, SeriesMap, ChartInput,
+    Series, EntityType, create_basic_generator,
+)
 
 
 class InstitutionsMap(Chart):
@@ -43,16 +21,30 @@ class InstitutionsMap(Chart):
 
     async def get_series(self, chart_input: ChartInput, **kwargs) -> SeriesMap:
         result = SeriesMap()
-        institutions = await Institution.find(Not(Institution.location == None),
-                                              chart_input.get_series_query("institutions"), nesting_depth=2,
-                                              fetch_links=True).to_list()
+        conditions = chart_input.get_series_conditions(Institution, "institutions")
+        async with get_session() as session:
+            stmt = select(Institution).where(
+                Institution.location.isnot(None), *conditions
+            )
+            res = await session.execute(stmt)
+            institutions = res.scalars().all()
         icon = kwargs.get("icon") or "institution.png"
-        series = {"type": "marker",
-                  "showAtZoom": kwargs.get("show_at_zoom"),
-                  "data": [{"id": i.uuid, "name": i.name, "position": fix_location_util(i.location), "icon": icon,
-                            "$nexus": {"type": EntityType.INSTITUTION, "id": i.uuid}} for i in institutions]}
+        series = {
+            "type": "marker",
+            "showAtZoom": kwargs.get("show_at_zoom"),
+            "data": [
+                {
+                    "id": i.id, "name": i.name,
+                    "position": fix_location_util(i.location),
+                    "icon": icon,
+                    "$nexus": {"type": EntityType.INSTITUTION, "id": i.id},
+                }
+                for i in institutions
+            ],
+        }
         result.add("institutions", Series(data=series, entity_type=EntityType.INSTITUTION))
         return result
+
 
 class ResearcherMap(Chart):
     identifier = "researcher_map"
@@ -63,16 +55,33 @@ class ResearcherMap(Chart):
 
     async def get_series(self, chart_input: ChartInput, **kwargs) -> SeriesMap:
         result = SeriesMap()
-        researchers = await Researcher.find(Not(Researcher.institution == None),
-                                              chart_input.get_series_query("researchers"), nesting_depth=2,
-                                              fetch_links=True).to_list()
+        conditions = chart_input.get_series_conditions(Researcher, "researchers")
+        async with get_session() as session:
+            stmt = (
+                select(Researcher)
+                .options(selectinload(Researcher.institution))
+                .where(Researcher.institution_id.isnot(None), *conditions)
+            )
+            res = await session.execute(stmt)
+            researchers = res.scalars().all()
         icon = kwargs.get("icon") or "researcher.png"
-        series = {"type": "marker",
-                  "showAtZoom": kwargs.get("show_at_zoom"),
-                  "data": [{"id": r.uuid, "name": r.full_name, "position": fix_location_util(r.institution.location), "icon": icon,
-                            "$nexus": {"type": EntityType.RESEARCHER, "id": r.uuid}} for r in researchers]}
+        series = {
+            "type": "marker",
+            "showAtZoom": kwargs.get("show_at_zoom"),
+            "data": [
+                {
+                    "id": r.id, "name": r.full_name,
+                    "position": fix_location_util(r.institution.location if r.institution else None),
+                    "icon": icon,
+                    "$nexus": {"type": EntityType.RESEARCHER, "id": r.id},
+                }
+                for r in researchers
+                if r.institution is not None and r.institution.location is not None
+            ],
+        }
         result.add("researchers", Series(data=series, entity_type=EntityType.RESEARCHER))
         return result
+
 
 class WorksGeoHeatmap(Chart):
     identifier = "works_geo_heatmap"
@@ -83,51 +92,47 @@ class WorksGeoHeatmap(Chart):
 
     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
         result = SeriesMap()
-        query = chart_input.get_series_query("works")
-        works = await Work.find(query, nesting_depth=2, fetch_links=True).to_list()
+        conditions = chart_input.get_series_conditions(Work, "works")
+        async with get_session() as session:
+            stmt = (
+                select(Work)
+                .options(selectinload(Work.authors).selectinload(Researcher.institution))
+                .where(*conditions)
+            )
+            res = await session.execute(stmt)
+            works = res.scalars().all()
+
         lng_lat_map = {}
         for work in works:
-            for author in work.authors:
-                if isinstance(author.institution,
-                              Institution) and author.institution.location is not None:
-                    lng_lat = author.institution.location
-                    key = str(author.institution.location)
-                    try:
-                        lng_lat_map[key][-1] = lng_lat_map[key][-1] + 1
-                    except KeyError:
-                        lng_lat_map[key] = [lng_lat[1], lng_lat[0], 1]
-
+            for author in work.authors or []:
+                if author.institution is not None and author.institution.location is not None:
+                    from geoalchemy2.shape import to_shape
+                    pt = to_shape(author.institution.location)
+                    key = f"{pt.x},{pt.y}"
+                    if key in lng_lat_map:
+                        lng_lat_map[key][-1] += 1
+                    else:
+                        lng_lat_map[key] = [pt.y, pt.x, 1]
 
         heatmap_data = list(lng_lat_map.values())
-        np_data = np.array(heatmap_data)
+        np_data = np.array(heatmap_data) if heatmap_data else np.array([])
         series_data = []
-        q1 = 1
-        q2 = 1
-        q3 = 1
-        if len(np_data)> 0:
+        q1 = q2 = q3 = 1
+        if len(np_data) > 0:
             series = pd.Series(np_data[:, 2])
             scaled = series / series.abs().max()
             np_data[:, 2] = scaled
-            q1 = np.percentile(scaled, 25)
-            q2 = np.percentile(scaled, 50)
-            q3 = np.percentile(scaled, 80)
+            q1 = float(np.percentile(scaled, 25))
+            q2 = float(np.percentile(scaled, 50))
+            q3 = float(np.percentile(scaled, 80))
             series_data = np_data.tolist()
 
-        data = {"type": "heatmap",
-                "data": {
-                    "data": series_data,
-                    "gradient": {q1: "blue", q2: "lime", q3: "red"},
-                    "radius": 10,
-                    "minOpacity": .2
-                }
-                }
-
+        data = {"type": "heatmap", "data": {"data": series_data, "gradient": {q1: "blue", q2: "lime", q3: "red"}, "radius": 10, "minOpacity": 0.2}}
         result.add("works", Series(data=data, entity_type=EntityType.WORK))
 
-        institution_vis = InstitutionsMap()
-        institution_map = await institution_vis.get_series(chart_input, icon="dot.svg", show_at_zoom=3)
-
+        institution_map = await InstitutionsMap().get_series(chart_input, icon="dot.svg", show_at_zoom=3)
         return result + institution_map
+
 
 class TopResearcherWorksCount(Chart):
     identifier = "top_researcher_works_count"
@@ -138,12 +143,17 @@ class TopResearcherWorksCount(Chart):
 
     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
         result = SeriesMap()
-        query = chart_input.get_series_query("researchers")
-        researchers = await Researcher.find(query, Not(Researcher.openalex_meta == None), nesting_depth=2, fetch_links=True).to_list()
-        points = []
-        for researcher in researchers:
-            points.append([researcher.full_name, {"value": researcher.openalex_meta["works_count"],
-                                                  "$nexus": {"type": EntityType.RESEARCHER, "id": researcher.uuid}}])
+        conditions = chart_input.get_series_conditions(Researcher, "researchers")
+        async with get_session() as session:
+            stmt = select(Researcher).where(
+                Researcher.openalex_meta.isnot(None), *conditions
+            )
+            res = await session.execute(stmt)
+            researchers = res.scalars().all()
+        points = [
+            [r.full_name, {"value": r.openalex_meta["works_count"], "$nexus": {"type": EntityType.RESEARCHER, "id": r.id}}]
+            for r in researchers if r.openalex_meta
+        ]
         points = list(reversed(sorted(points, key=lambda row: row[-1]["value"])))[:20]
         result.add("researchers", Series(data=points, entity_type=EntityType.RESEARCHER))
         return result
@@ -158,46 +168,40 @@ class SummaryChart(Chart):
 
     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
         result = SeriesMap()
-        works_query = chart_input.get_series_query("works")
-        researcher_query = chart_input.get_series_query("researchers")
-        institution_query = chart_input.get_series_query("institutions")
+        async with get_session() as session:
+            works_conditions = chart_input.get_series_conditions(Work, "works")
+            researcher_conditions = chart_input.get_series_conditions(Researcher, "researchers")
+            institution_conditions = chart_input.get_series_conditions(Institution, "institutions")
 
-        works = await Work.find(works_query, nesting_depth=2, fetch_links=True).to_list()
+            works = (await session.execute(select(Work).where(*works_conditions))).scalars().all()
+            researchers = (await session.execute(select(Researcher).where(*researcher_conditions))).scalars().all()
+            institutions = (await session.execute(select(Institution).where(*institution_conditions))).scalars().all()
+
         works_df = pd.DataFrame([w.model_dump() for w in works])
-        highest_keywords = works_df.explode("keywords")["keywords"].value_counts().head(3)
+        highest_keywords = works_df.explode("keywords")["keywords"].value_counts().head(3) if not works_df.empty else pd.Series()
 
-        researchers = await Researcher.find(researcher_query, nesting_depth=2, fetch_links=True).to_list()
         researchers_df = pd.DataFrame([r.model_dump() for r in researchers])
-        researchers_df["works_count"] = researchers_df["openalex_meta"].apply(lambda meta: meta["works_count"] if meta is not None else None)
-        highest_researchers = researchers_df.iloc[researchers_df["works_count"].sort_values(ascending=False).head(3).index]
-        highest_researchers = [f"<a href=\"/researchers/{r['uuid']}\" target=\"_blank\">{r['full_name']}</a>" for r in highest_researchers.to_dict(orient="records")]
+        if not researchers_df.empty:
+            researchers_df["works_count"] = researchers_df["openalex_meta"].apply(
+                lambda m: m["works_count"] if m else None
+            )
+            top_researchers = researchers_df.nlargest(3, "works_count", keep="all")
+            highest_researchers = [
+                f'<a href="/researchers/{r["uuid"]}" target="_blank">{r["full_name"]}</a>'
+                for r in top_researchers.to_dict(orient="records")
+            ]
+            researchers_df["h_index"] = researchers_df["openalex_meta"].apply(
+                lambda m: m["summary_stats"]["h_index"] if m else None
+            )
+            h_idx_max = researchers_df["h_index"].dropna()
+            highest_h_score = researchers_df.loc[h_idx_max.idxmax()] if not h_idx_max.empty else None
+        else:
+            highest_researchers = []
+            highest_h_score = None
 
-        researchers_df["h_index"] = researchers_df["openalex_meta"].apply(lambda meta: meta["summary_stats"]["h_index"] if meta is not None else None)
-        highest_h_score = researchers_df.iloc[researchers_df["h_index"].idxmax()]
-
-        institutions = await Institution.find(institution_query, nesting_depth=2, fetch_links=True).to_list()
-
-        works_md = f"""
-### Works
-**Total count:** {len(works)}
-
-**Most used keywords:** {", ".join(highest_keywords.index)}
-        """
-        result.add("works", Series(data=works_md, entity_type=EntityType.WORK))
-        researchers_md = f"""
-### Researchers
-**Total count:** {len(researchers)}
-
-**Most publications:** {", ".join(highest_researchers)}
-
-**Highest H-Index:** <a href=\"/researchers/{highest_h_score['uuid']}\" target=\"_blank\">{highest_h_score['full_name']}</a> ({highest_h_score["h_index"]})
-        """
-        result.add("researchers", Series(data=researchers_md, entity_type=EntityType.RESEARCHER))
-        institutions_md = f"""
-### Institutions
-**Total count:** {len(institutions)}
-        """
-        result.add("institutions", Series(data=institutions_md, entity_type=EntityType.INSTITUTION))
+        result.add("works", Series(data=f"""### Works\n**Total count:** {len(works)}\n\n**Most used keywords:** {", ".join(highest_keywords.index) if not highest_keywords.empty else "N/A"}""", entity_type=EntityType.WORK))
+        result.add("researchers", Series(data=f"""### Researchers\n**Total count:** {len(researchers)}\n\n**Most publications:** {", ".join(highest_researchers)}\n\n**Highest H-Index:** {'<a href="/researchers/' + str(highest_h_score["uuid"]) + '" target="_blank">' + highest_h_score["full_name"] + '</a> (' + str(highest_h_score["h_index"]) + ')' if highest_h_score is not None else "N/A"}""", entity_type=EntityType.RESEARCHER))
+        result.add("institutions", Series(data=f"### Institutions\n**Total count:** {len(institutions)}", entity_type=EntityType.INSTITUTION))
         return result
 
 
@@ -211,7 +215,7 @@ class MixedInstitutionAggregation(Chart):
     INSTITUTION_FIELD_NAME = "aggregate_field_name"
 
     @classmethod
-    def to_table_series(cls, dataframe: pd.DataFrame, field_name: str):
+    def to_table_series(cls, dataframe: pd.DataFrame, field_name: str) -> dict:
         headers = [str(c) for c in dataframe.columns]
         headers.insert(0, field_name)
         rows = [[index] + row for index, row in zip(dataframe.index, dataframe.values.tolist())]
@@ -219,23 +223,17 @@ class MixedInstitutionAggregation(Chart):
 
     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
         result = SeriesMap()
-        institution_query = chart_input.get_series_query("institutions")
+        conditions = chart_input.get_series_conditions(Institution, "institutions")
         field_name = chart_input.special_fields.get(MixedInstitutionAggregation.INSTITUTION_FIELD_NAME)
-
-        institutions = await Institution.find(institution_query, nesting_depth=2, fetch_links=True).to_list()
-        institutions = pd.DataFrame([i.model_dump() for i in institutions])
-        institutions["avg_h_index"] = institutions["openalex_meta"].apply(
-            lambda inst: inst.get("summary_stats").get("h_index"))
-
-        grouped = institutions.groupby([field_name])
-
+        async with get_session() as session:
+            institutions = (await session.execute(select(Institution).where(*conditions))).scalars().all()
+        df = pd.DataFrame([i.model_dump() for i in institutions])
+        df["avg_h_index"] = df["openalex_meta"].apply(lambda inst: inst.get("summary_stats", {}).get("h_index") if inst else None)
+        grouped = df.groupby([field_name])
         count_series = grouped.count().rename(columns={"uuid": "count"})["count"]
         avg_h_index_series = grouped["avg_h_index"].mean()
-
         final_df = pd.concat([count_series, avg_h_index_series], axis=1)
-
-        result.add("institutions", Series(data=MixedInstitutionAggregation.to_table_series(final_df, field_name),
-                                          entity_type=EntityType.INSTITUTION))
+        result.add("institutions", Series(data=MixedInstitutionAggregation.to_table_series(final_df, field_name), entity_type=EntityType.INSTITUTION))
         return result
 
 
@@ -250,25 +248,19 @@ class MixedWorkAggregation(Chart):
 
     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
         result = SeriesMap()
-        work_query = chart_input.get_series_query("works")
+        conditions = chart_input.get_series_conditions(Work, "works")
         field_name = chart_input.special_fields.get(MixedWorkAggregation.WORK_FIELD_NAME)
-
-        works = await Work.find(work_query, nesting_depth=2, fetch_links=True).to_list()
-        works = pd.DataFrame([i.model_dump() for i in works])
-        works["avg_citations"] = works["openalex_meta"].apply(
-            lambda meta: int(meta.get("cited_by_count")) if meta is not None else None)
-        works["dblp_type"] = works["type"].apply(lambda inst: inst.get("dblp"))
-        works["openalex_type"] = works["type"].apply(lambda inst: inst.get("openalex"))
-
-        grouped = works.groupby([field_name])
-
+        async with get_session() as session:
+            works = (await session.execute(select(Work).where(*conditions))).scalars().all()
+        df = pd.DataFrame([w.model_dump() for w in works])
+        df["avg_citations"] = df["openalex_meta"].apply(lambda m: int(m.get("cited_by_count", 0)) if m else None)
+        df["dblp_type"] = df["type"].apply(lambda t: t.get("dblp") if t else None)
+        df["openalex_type"] = df["type"].apply(lambda t: t.get("openalex") if t else None)
+        grouped = df.groupby([field_name])
         count_series = grouped.count().rename(columns={"uuid": "count"})["count"]
-        avg_h_index_series = grouped["avg_citations"].mean()
-
-        final_df = pd.concat([count_series, avg_h_index_series], axis=1)
-
-        result.add("works", Series(data=MixedInstitutionAggregation.to_table_series(final_df, field_name),
-                                   entity_type=EntityType.WORK))
+        avg_citations_series = grouped["avg_citations"].mean()
+        final_df = pd.concat([count_series, avg_citations_series], axis=1)
+        result.add("works", Series(data=MixedInstitutionAggregation.to_table_series(final_df, field_name), entity_type=EntityType.WORK))
         return result
 
 
@@ -280,26 +272,20 @@ class MixedResearchActivity(Chart):
     generator = read_generator("mixedResearchActivity.js")
 
     @classmethod
-    def get_chart_data(cls, works: list[Work]):
+    def get_chart_data(cls, works) -> dict:
         df = pd.DataFrame([w.model_dump() for w in works])
-
         grouped = df.groupby(["publication_date"])
         count_series = grouped.count().rename(columns={"uuid": "count"})
-        dates = count_series.index.tolist()
-        data = count_series["count"].tolist()
-
-        return {"data": data, "date": dates}
+        return {"data": count_series["count"].tolist(), "date": count_series.index.tolist()}
 
     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
         result = SeriesMap()
-        work_query = chart_input.get_series_query("works")
-
-        works = await Work.find(work_query, Not(Work.publication_date == None), nesting_depth=2,
-                                fetch_links=True).to_list()
-
-        chart_data = MixedResearchActivity.get_chart_data(works)
-
-        result.add("works", Series(data=chart_data, entity_type=EntityType.WORK))
+        conditions = chart_input.get_series_conditions(Work, "works")
+        async with get_session() as session:
+            works = (
+                await session.execute(select(Work).where(Work.publication_date.isnot(None), *conditions))
+            ).scalars().all()
+        result.add("works", Series(data=MixedResearchActivity.get_chart_data(works), entity_type=EntityType.WORK))
         return result
 
 
@@ -314,25 +300,21 @@ class MixedActivityYearsTypes(Chart):
 
     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
         result = SeriesMap()
-        work_query = chart_input.get_series_query("works")
-
+        conditions = chart_input.get_series_conditions(Work, "works")
         field_name = chart_input.special_fields.get(MixedActivityYearsTypes.TYPE_FIELD_NAME)
-
-        works = await Work.find(work_query, Not(Work.publication_year == None), fetch_links=True, nesting_depth=2).to_list()
-        if len(works) > 0:
-            works_df = pd.DataFrame([i.model_dump() for i in works])
-            works_df["dblp_type"] = works_df["type"].apply(lambda inst: inst.get("dblp"))
-            works_df["openalex_type"] = works_df["type"].apply(lambda inst: inst.get("openalex"))
-
-            grouped = works_df.groupby(['publication_year', field_name]).size().unstack(fill_value=0)
-
-            data = grouped.to_dict(orient='list')
-
+        async with get_session() as session:
+            works = (
+                await session.execute(select(Work).where(Work.publication_year.isnot(None), *conditions))
+            ).scalars().all()
+        if works:
+            df = pd.DataFrame([w.model_dump() for w in works])
+            df["dblp_type"] = df["type"].apply(lambda t: t.get("dblp") if t else None)
+            df["openalex_type"] = df["type"].apply(lambda t: t.get("openalex") if t else None)
+            grouped = df.groupby(["publication_year", field_name]).size().unstack(fill_value=0)
+            data = grouped.to_dict(orient="list")
             years = grouped.index.tolist()
         else:
-            data = []
-            years = []
-
+            data, years = [], []
         result.add("works", Series(data={"data": data, "years": years}, entity_type=EntityType.WORK))
         return result
 
@@ -346,55 +328,15 @@ class KeywordCloud(Chart):
 
     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
         result = SeriesMap()
-        work_query = chart_input.get_series_query("works")
-
-        works = await Work.find(work_query, Not(Work.keywords == None), nesting_depth=2, fetch_links=True).to_list()
-        df = pd.DataFrame([i.model_dump() for i in works])
-
+        conditions = chart_input.get_series_conditions(Work, "works")
+        async with get_session() as session:
+            works = (
+                await session.execute(select(Work).where(Work.keywords.isnot(None), *conditions))
+            ).scalars().all()
+        df = pd.DataFrame([w.model_dump() for w in works])
         df = df.explode("keywords")
         grouped = df.groupby(["keywords"])
         count_df = grouped.count().rename(columns={"uuid": "weight"})
-        data = count_df[["weight"]].to_dict(orient='index')
+        data = count_df[["weight"]].to_dict(orient="index")
         result.add("works", Series(data=data, entity_type=EntityType.WORK))
         return result
-
-
-"""class PackedKeywordsBubbleChart(Chart):
-    identifier = "packed_keywords_bubble_chart"
-    name = "Top-10 Keywords Researchers (Bubble)"
-    type = ChartType.MIXED
-    chart_template = ChartTemplates.HIGHCHARTS
-    generator = read_generator("packedKeywordsBubbleChart.js")
-
-    async def get_series(self, chart_input: ChartInput) -> SeriesMap:
-        result = SeriesMap()
-        work_query = chart_input.get_series_query("works")
-
-        works = await Work.find(work_query, Not(Work.keywords == None), nesting_depth=2, fetch_links=True).to_list()
-        df = pd.DataFrame([i.model_dump() for i in works])
-
-        df_exploded = df.explode("keywords")
-        top_keywords = (
-            df_exploded["keywords"]
-            .value_counts()
-            .head(10)
-            .index
-        )
-        filtered_df = df_exploded[df_exploded["keywords"].isin(top_keywords)]
-
-        def get_author_stats(group):
-            authors = group.explode("authors")
-            author_counts = authors.value_counts()
-            return [{"name": author["full_name"], "value": count,
-                     "$nexus": {"type": EntityType.RESEARCHER, "id": author["uuid"]}} for author, count in
-                    author_counts.items()]
-
-        data = []
-        for keyword in top_keywords:
-            keyword_group = filtered_df[filtered_df["keywords"] == keyword]
-            author_stats = get_author_stats(keyword_group["authors"])
-            data.append({"name": keyword, "data": author_stats})
-
-        result.add("works", Series(data=data, entity_type=EntityType.WORK))
-        return result
-"""

@@ -7,12 +7,10 @@ class Settings(BaseSettings):
     evaluation_mode: bool = False
     default_batch_size: int = 20
     openalex_batch_size: int = 20
-    db: str = "nexus_dev"
     optimized_insert: bool = False
-    mongo_cache_minutes: int = 60
-    mongo_cache_enabled: bool = True
     evaluation_path: str = "./evaluation/data"
-    db_connection_string: str = "mongodb://localhost:27017"
+    db_connection_string: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/nexus_dev"
+    db_connection_string_sync: str = "postgresql+psycopg2://postgres:postgres@localhost:5432/nexus_dev"
 
     model_config = SettingsConfigDict(env_file=".env")
 

@@ -3,9 +3,9 @@ FROM python:3.11
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-COPY ./requirements.txt /requirements.txt
+COPY ./pyproject.toml /pyproject.toml
 
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r /requirements.txt
+RUN uv sync
 
 COPY /app /app
 COPY ./docker-entrypoint.sh /docker-entrypoint.sh

@@ -83,6 +83,7 @@ async def fetch_authors_for_works(works: list[dict], batch_id: int) -> list[dict
             works)))
     author_id_chunks = _.chunk(author_ids, OPENALEX_AUTHOR_BATCH_SIZE)
     for chunk in author_id_chunks:
+        chunk = list(filter(lambda c: c is not None, chunk))
         chunk_expr = "|".join(chunk)
         params = {"filter": f"ids.openalex:{chunk_expr}", "per-page": OPENALEX_AUTHOR_BATCH_SIZE}
         async with OpenAlexSession() as session:
@@ -99,7 +100,7 @@ async def fetch_institutions_for_authors(authors: list[dict], batch_id: int) -> 
     institution_ids = _.uniq(_.flatten(
         map(lambda a: [parse_openalex_id(a["institution"]["id"]) for a in a["affiliations"]],
             authors)))
-    last_institution_authors = filter(lambda a: len(a["last_known_institutions"]) > 0, authors)
+    last_institution_authors = filter(lambda a: len(a["last_known_institutions"]) > 0 if a["last_known_institutions"] is not None else [], authors)
     institution_ids = institution_ids + [parse_openalex_id(a["last_known_institutions"][0]["id"]) for a in last_institution_authors]
     institution_id_chunks = _.chunk(institution_ids, OPENALEX_INSTITUTION_BATCH_SIZE)
     for chunk in institution_id_chunks:

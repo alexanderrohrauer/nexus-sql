@@ -9,3 +9,5 @@ app/*.sqlite
 evaluation/**/*.sqlite
 *.env
 mongo_dumps/*
+
+.idea/

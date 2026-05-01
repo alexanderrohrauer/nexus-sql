@@ -1,33 +1,23 @@
 import random
-from typing import Union, Tuple
+from typing import Optional, Tuple
 
-from beanie.odm.documents import FindType
-from beanie.odm.queries.find import FindOne
 from fastapi import HTTPException
-
-from app.db.db import client
-
-
-def with_transaction(func):
-    async def wrapper(*args, **kwargs):
-        try:
-            async with await client.start_session() as session:
-                async with session.start_transaction():
-                    result = await func(*args, **kwargs, session=session)
-                    return result
-        except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Transaction failed: {str(e)}")
-
-    return wrapper
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def require_instance(result: Union[FindOne[FindType], FindOne["DocumentProjectionType"]]):
-    result = await result
+async def require_instance(result):
     if result is not None:
         return result
+    raise HTTPException(status_code=404, detail="This instance was not found!")
+
+
+def fix_location_util(location) -> Optional[Tuple[float, float]]:
+    if location is None:
+        return None
+    if isinstance(location, tuple):
+        lon, lat = location
     else:
-        raise HTTPException(status_code=404, detail="This instance was not found!")
-
-
-def fix_location_util(location: Tuple[float, float]):
-    return location[0] + random.uniform(0.0002, 0.0003), location[1]
+        from geoalchemy2.shape import to_shape
+        point = to_shape(location)
+        lon, lat = point.x, point.y
+    return lon + random.uniform(0.0002, 0.0003), lat

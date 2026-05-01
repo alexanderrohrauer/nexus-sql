@@ -10,19 +10,21 @@ from app.visualizations.mixed import MixedInstitutionAggregation
 async def parse_visualization_data(chart_cls, queries: dict, query_preset: dict, **kwargs):
     try:
         chart_instance = chart_cls()
-        special_fields = kwargs.get("special_fields") or {}
-        kwargs.pop("special_fields") if "special_fields" in kwargs else None
-        chart_input = ChartInput(queries=queries, pre_filters=query_preset, special_fields=special_fields, **kwargs)
+        special_fields = kwargs.pop("special_fields", {})
+        chart_input = ChartInput(
+            queries=queries, pre_filters=query_preset, special_fields=special_fields, **kwargs
+        )
         return VisualizationData(
             series=await chart_instance.get_series(chart_input),
             generator=chart_instance.generator,
             chart_template=chart_instance.chart_template,
-            filters=chart_input.queries)
+            filters=chart_input.queries,
+        )
     except StopIteration:
         raise HTTPException(status_code=404, detail="Visualization-type not found")
 
 
-def get_special_field_default_values(visualization: Visualization):
+def get_special_field_default_values(visualization: Visualization) -> dict:
     if visualization.chart == MixedInstitutionAggregation.identifier:
         return {MixedInstitutionAggregation.INSTITUTION_FIELD_NAME: "type"}
     if visualization.chart == MixedWorkAggregation.identifier:

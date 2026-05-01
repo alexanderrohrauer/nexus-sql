@@ -1,4 +1,4 @@
-from apscheduler.jobstores.mongodb import MongoDBJobStore
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from app.settings import get_settings
@@ -6,7 +6,7 @@ from app.settings import get_settings
 settings = get_settings()
 
 jobstores = {
-    "default": MongoDBJobStore(settings.db, "jobs", host=settings.db_connection_string)
+    "default": SQLAlchemyJobStore(url=settings.db_connection_string_sync)
 }
 
 scheduler = AsyncIOScheduler(jobstores=jobstores)

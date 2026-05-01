@@ -2,8 +2,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.controllers import dashboard_controller, import_task_controller, researchers_controller, \
-    institutions_controller, works_controller, chart_controller
+from app.controllers import (
+    dashboard_controller, import_task_controller, researchers_controller,
+    institutions_controller, works_controller, chart_controller,
+)
 from app.db import db
 from app.middlewares import cors_middleware
 from app.scheduled.scheduler import scheduler

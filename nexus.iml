@@ -6,8 +6,9 @@
       <sourceFolder url="file://$MODULE_DIR$/app/resources" type="java-resource" />
       <excludeFolder url="file://$MODULE_DIR$/data" />
       <excludeFolder url="file://$MODULE_DIR$/example-data" />
+      <excludeFolder url="file://$MODULE_DIR$/.venv" />
     </content>
-    <orderEntry type="jdk" jdkName="Python 3.11 (nexus)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="uv (nexus-sql)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
     <orderEntry type="library" name="d3" level="application" />
     <orderEntry type="library" name="topojson-client" level="application" />

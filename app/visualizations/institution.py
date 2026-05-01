@@ -1,8 +1,12 @@
-from beanie import PydanticObjectId
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
+from app.db.db import get_session
 from app.models import Researcher
-from app.utils.visualization_utils import Chart, ChartType, ChartTemplates, ChartInput, SeriesMap, \
-    create_basic_generator, EntityType, Series
+from app.utils.visualization_utils import (
+    Chart, ChartType, ChartTemplates, ChartInput, SeriesMap,
+    create_basic_generator, EntityType, Series,
+)
 
 
 class InstitutionCurrentResearchers(Chart):
@@ -14,9 +18,14 @@ class InstitutionCurrentResearchers(Chart):
 
     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
         result = SeriesMap()
-        query = chart_input.get_series_query("researchers")
         institution = chart_input.institution
-        researchers = await Researcher.find(query, Researcher.institution.id == PydanticObjectId(institution.id), fetch_links=True, nesting_depth=2).to_list()
-
-        result.add("researchers", Series(data=researchers, entity_type=EntityType.RESEARCHER))
+        conditions = chart_input.get_series_conditions(Researcher, "researchers")
+        async with get_session() as session:
+            stmt = (
+                select(Researcher)
+                .options(selectinload(Researcher.institution))
+                .where(Researcher.institution_id == institution.id, *conditions)
+            )
+            researchers = (await session.execute(stmt)).scalars().all()
+        result.add("researchers", Series(data=[r.model_dump() for r in researchers], entity_type=EntityType.RESEARCHER))
         return result

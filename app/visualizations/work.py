@@ -1,8 +1,13 @@
-from beanie.odm.operators.find.comparison import In
+from sqlalchemy import select
+from sqlalchemy.orm import selectinload
 
+from app.db.db import get_session
 from app.models import Researcher
-from app.utils.visualization_utils import Chart, ChartType, ChartTemplates, ChartInput, SeriesMap, \
-    create_basic_generator, EntityType, Series
+from app.models.works import work_authors
+from app.utils.visualization_utils import (
+    Chart, ChartType, ChartTemplates, ChartInput, SeriesMap,
+    create_basic_generator, EntityType, Series,
+)
 
 
 class WorkAuthors(Chart):
@@ -14,10 +19,18 @@ class WorkAuthors(Chart):
 
     async def get_series(self, chart_input: ChartInput) -> SeriesMap:
         result = SeriesMap()
-        query = chart_input.get_series_query("authors")
         work = chart_input.work
-        ids = [a.ref.id for a in work.authors] if work.authors is not None else []
-        researchers = await Researcher.find(query, In(Researcher.id, ids), fetch_links=True, nesting_depth=2).to_list()
-
-        result.add("authors", Series(data=researchers, entity_type=EntityType.RESEARCHER))
+        conditions = chart_input.get_series_conditions(Researcher, "authors")
+        async with get_session() as session:
+            author_ids = [a.id for a in (work.authors or [])]
+            if not author_ids:
+                result.add("authors", Series(data=[], entity_type=EntityType.RESEARCHER))
+                return result
+            stmt = (
+                select(Researcher)
+                .options(selectinload(Researcher.institution))
+                .where(Researcher.id.in_(author_ids), *conditions)
+            )
+            researchers = (await session.execute(stmt)).scalars().all()
+        result.add("authors", Series(data=[r.model_dump() for r in researchers], entity_type=EntityType.RESEARCHER))
         return result
